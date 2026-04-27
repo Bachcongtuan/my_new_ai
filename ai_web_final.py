@@ -1,3 +1,5 @@
+# Copyright (c) 2026 Bach Cong Tuan
+# All rights reserved.
 import json
 import os
 import threading

@@ -13,7 +13,7 @@ from urllib import parse, request
 # --- CONFIG ---
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 5000))
-AUTO_DELETE_SECONDS = 300 
+AUTO_DELETE_SECONDS = 900
 LAST_ACTIVITY_TIME = time.time()
 
 SYSTEM_PROMPT = "You are a practical AI assistant. Give clear, concise, useful answers."

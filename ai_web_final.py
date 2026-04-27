@@ -9,20 +9,78 @@ from urllib import error, parse, request
 
 
 HOST = "0.0.0.0"
-PORT = int(os.environ.get("PORT", 5000))
+PORT = 5000
 SYSTEM_PROMPT = (
     "You are a practical AI assistant. Give clear, concise, useful answers."
 )
 HISTORY_FILE = Path(__file__).with_name("chat_history.json")
 HISTORY_LOCK = threading.Lock()
 MAX_HISTORY_MESSAGES = max(2, int(os.getenv("MAX_HISTORY_MESSAGES", "16")))
+LEGACY_MODEL_NOTICE = (
+    "Legacy Gemini 1.x models are retired. "
+    "This app maps those old tiers to current supported Gemini models."
+)
+MODEL_PRESETS = [
+    {
+        "key": "flash",
+        "name": "Gemini 2.5 Flash",
+        "model": "gemini-2.5-flash",
+        "description": "Fast balanced default for web chat.",
+        "legacy": "Closest replacement for Gemini 1.5 Flash.",
+        "status": "stable",
+    },
+    {
+        "key": "pro",
+        "name": "Gemini 2.5 Pro",
+        "model": "gemini-2.5-pro",
+        "description": "Best choice for deep reasoning and harder prompts.",
+        "legacy": "Closest replacement for Gemini 1.5 Pro.",
+        "status": "stable",
+    },
+    {
+        "key": "flash_lite",
+        "name": "Gemini 2.5 Flash-Lite",
+        "model": "gemini-2.5-flash-lite",
+        "description": "Lowest-cost and highest-throughput current option.",
+        "legacy": "Closest replacement for Gemini 1.5 Flash-8B.",
+        "status": "stable",
+    },
+    {
+        "key": "compat",
+        "name": "Gemini 2.0 Flash",
+        "model": "gemini-2.0-flash",
+        "description": "Temporary text-first compatibility option.",
+        "legacy": "Closest currently available fallback for Gemini 1.0 Pro.",
+        "status": "deprecated",
+    },
+]
+MODEL_PRESETS_BY_KEY = {item["key"]: item for item in MODEL_PRESETS}
+DEFAULT_MODEL_KEY = os.getenv("AI_DEFAULT_MODEL_KEY", "flash").strip().lower()
 
 
-def get_model() -> str:
-    configured = os.getenv("AI_MODEL", "").strip()
-    if configured:
-        return configured
-    return "gemini-2.5-flash"
+def get_default_model_key() -> str:
+    if DEFAULT_MODEL_KEY in MODEL_PRESETS_BY_KEY:
+        return DEFAULT_MODEL_KEY
+    return "flash"
+
+
+def get_model_choice(model_key: str | None = None) -> dict[str, str]:
+    key = (model_key or "").strip().lower()
+    if key in MODEL_PRESETS_BY_KEY:
+        return MODEL_PRESETS_BY_KEY[key]
+    return MODEL_PRESETS_BY_KEY[get_default_model_key()]
+
+
+def get_model_catalog_payload(model_key: str | None = None) -> dict:
+    selected = get_model_choice(model_key)
+    return {
+        "models": [dict(item) for item in MODEL_PRESETS],
+        "default_model_key": get_default_model_key(),
+        "selected_model_key": selected["key"],
+        "selected_model": selected["model"],
+        "selected_model_name": selected["name"],
+        "legacy_notice": LEGACY_MODEL_NOTICE,
+    }
 
 
 def utc_timestamp() -> str:
@@ -100,12 +158,11 @@ def post_json(url: str, headers: dict[str, str], payload: dict) -> dict:
         raise RuntimeError(f"Network error: {exc.reason}") from exc
 
 
-def call_gemini(history: list[dict], user_message: str) -> str:
+def call_gemini(history: list[dict], user_message: str, model_code: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY.")
 
-    model = get_model()
     contents = []
     for item in history[-MAX_HISTORY_MESSAGES:]:
         role = "model" if item["role"] == "assistant" else "user"
@@ -119,7 +176,7 @@ def call_gemini(history: list[dict], user_message: str) -> str:
     }
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{parse.quote(model)}:generateContent?key={parse.quote(api_key)}"
+        f"{parse.quote(model_code)}:generateContent?key={parse.quote(api_key)}"
     )
     response = post_json(url, {"Content-Type": "application/json"}, payload)
     try:
@@ -132,12 +189,12 @@ def call_gemini(history: list[dict], user_message: str) -> str:
         raise RuntimeError(f"Unexpected Gemini response: {response}") from exc
 
 
-def generate_reply(history: list[dict], user_message: str) -> str:
-    return call_gemini(history, user_message)
+def generate_reply(history: list[dict], user_message: str, model_code: str) -> str:
+    return call_gemini(history, user_message, model_code)
 
 
 def html_page() -> str:
-    model = get_model()
+    default_model = get_model_choice()
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -216,6 +273,7 @@ def html_page() -> str:
     .actions {{
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 10px;
     }}
 
@@ -242,6 +300,34 @@ def html_page() -> str:
       background: rgba(255,255,255,0.06);
       color: var(--text);
       border: 1px solid var(--line);
+    }}
+
+    .picker {{
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 320px;
+    }}
+
+    .picker span {{
+      color: var(--muted);
+      font-size: 12px;
+    }}
+
+    select {{
+      width: 100%;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      padding: 11px 14px;
+      font: inherit;
+      outline: none;
+    }}
+
+    select:focus {{
+      border-color: rgba(110, 231, 200, 0.55);
+      box-shadow: 0 0 0 4px rgba(110, 231, 200, 0.08);
     }}
 
     .primary {{
@@ -325,6 +411,13 @@ def html_page() -> str:
       font-size: 14px;
     }}
 
+    .submeta {{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }}
+
     .error {{
       color: var(--danger);
     }}
@@ -380,9 +473,15 @@ def html_page() -> str:
     <header class="topbar">
       <div>
         <h1 class="title">Gemini Web Chat</h1>
-        <div class="meta">Model: <strong>{model}</strong> | Port: <strong>{PORT}</strong></div>
+        <div class="meta" id="modelMeta">Preset: <strong>{default_model["name"]}</strong> | Model: <strong>{default_model["model"]}</strong> | Port: <strong>{PORT}</strong></div>
+        <div class="submeta" id="modelHint">{default_model["description"]} {default_model["legacy"]}</div>
+        <div class="submeta" id="legacyNotice">{LEGACY_MODEL_NOTICE}</div>
       </div>
       <div class="actions">
+        <label class="picker">
+          <span>Model preset</span>
+          <select id="modelSelect"></select>
+        </label>
         <button class="ghost" id="clearButton" type="button">Clear history</button>
       </div>
     </header>
@@ -404,7 +503,14 @@ def html_page() -> str:
     const input = document.getElementById("messageInput");
     const sendButton = document.getElementById("sendButton");
     const clearButton = document.getElementById("clearButton");
+    const modelSelect = document.getElementById("modelSelect");
+    const modelMeta = document.getElementById("modelMeta");
+    const modelHint = document.getElementById("modelHint");
+    const legacyNotice = document.getElementById("legacyNotice");
     const statusNode = document.getElementById("status");
+    const MODEL_STORAGE_KEY = "gemini_web_chat_model_key";
+    let modelCatalog = [];
+    let defaultModelKey = "{default_model["key"]}";
 
     function escapeHtml(text) {{
       return text
@@ -416,6 +522,44 @@ def html_page() -> str:
     function setStatus(message, isError = false) {{
       statusNode.textContent = message || "";
       statusNode.className = isError ? "status error" : "status";
+    }}
+
+    function getSelectedModel() {{
+      const selectedKey = modelSelect.value || defaultModelKey;
+      return modelCatalog.find((item) => item.key === selectedKey) || modelCatalog[0] || null;
+    }}
+
+    function updateModelUi() {{
+      const selected = getSelectedModel();
+      if (!selected) {{
+        return;
+      }}
+
+      localStorage.setItem(MODEL_STORAGE_KEY, selected.key);
+      modelMeta.innerHTML = `Preset: <strong>${{escapeHtml(selected.name)}}</strong> | Model: <strong>${{escapeHtml(selected.model)}}</strong> | Port: <strong>{PORT}</strong>`;
+      modelHint.textContent = `${{selected.description}} ${{selected.legacy}}`;
+      legacyNotice.textContent = "Legacy Gemini 1.x models are retired. These presets use current supported replacements.";
+    }}
+
+    function renderModels(payload) {{
+      modelCatalog = payload.models || [];
+      defaultModelKey = payload.default_model_key || defaultModelKey;
+      const storedKey = localStorage.getItem(MODEL_STORAGE_KEY);
+      const initialKey = modelCatalog.some((item) => item.key === storedKey)
+        ? storedKey
+        : defaultModelKey;
+
+      modelSelect.innerHTML = "";
+      for (const item of modelCatalog) {{
+        const option = document.createElement("option");
+        option.value = item.key;
+        option.textContent = `${{item.name}} | ${{item.model}}`;
+        modelSelect.appendChild(option);
+      }}
+
+      modelSelect.value = initialKey;
+      legacyNotice.textContent = payload.legacy_notice || legacyNotice.textContent;
+      updateModelUi();
     }}
 
     function renderHistory(history) {{
@@ -438,6 +582,12 @@ def html_page() -> str:
       chat.scrollTop = chat.scrollHeight;
     }}
 
+    async function loadModels() {{
+      const response = await fetch("/api/models");
+      const data = await response.json();
+      renderModels(data);
+    }}
+
     async function loadHistory() {{
       const response = await fetch("/api/history");
       const data = await response.json();
@@ -445,17 +595,21 @@ def html_page() -> str:
     }}
 
     async function sendMessage(message) {{
+      const selected = getSelectedModel();
       const response = await fetch("/api/chat", {{
         method: "POST",
         headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{ message }})
+        body: JSON.stringify({{
+          message,
+          model_key: selected ? selected.key : defaultModelKey
+        }})
       }});
       const data = await response.json();
       if (!response.ok) {{
         throw new Error(data.error || "Request failed.");
       }}
       renderHistory(data.history || []);
-      return data.reply;
+      return data;
     }}
 
     form.addEventListener("submit", async (event) => {{
@@ -471,9 +625,9 @@ def html_page() -> str:
       setStatus("Gemini is thinking...");
 
       try {{
-        await sendMessage(message);
+        const result = await sendMessage(message);
         input.value = "";
-        setStatus("Ready.");
+        setStatus(`Ready. Using ${{result.model_name}}.`);
       }} catch (err) {{
         setStatus(err.message, true);
       }} finally {{
@@ -498,6 +652,14 @@ def html_page() -> str:
       }}
     }});
 
+    modelSelect.addEventListener("change", () => {{
+      updateModelUi();
+      const selected = getSelectedModel();
+      if (selected) {{
+        setStatus(`Model changed to ${{selected.name}}.`);
+      }}
+    }});
+
     input.addEventListener("keydown", (event) => {{
       if (event.key === "Enter" && !event.shiftKey) {{
         event.preventDefault();
@@ -505,7 +667,7 @@ def html_page() -> str:
       }}
     }});
 
-    loadHistory()
+    Promise.all([loadModels(), loadHistory()])
       .then(() => setStatus("Ready."))
       .catch(() => setStatus("Could not load chat history.", true));
   </script>
@@ -539,6 +701,9 @@ class AIRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/":
             self.send_html(HTTPStatus.OK, html_page())
+            return
+        if self.path == "/api/models":
+            self.send_json(HTTPStatus.OK, get_model_catalog_payload())
             return
         if self.path == "/api/history":
             self.send_json(HTTPStatus.OK, {"history": snapshot_history()})
@@ -576,8 +741,9 @@ class AIRequestHandler(BaseHTTPRequestHandler):
             if not message:
                 raise ValueError("Message cannot be empty.")
 
+            model_choice = get_model_choice(str(payload.get("model_key", "")))
             history = snapshot_history()
-            reply = generate_reply(history, message)
+            reply = generate_reply(history, message, model_choice["model"])
             add_history("user", message)
             add_history("assistant", reply)
             self.send_json(
@@ -586,7 +752,9 @@ class AIRequestHandler(BaseHTTPRequestHandler):
                     "reply": reply,
                     "history": snapshot_history(),
                     "provider": "gemini",
-                    "model": get_model(),
+                    "model": model_choice["model"],
+                    "model_key": model_choice["key"],
+                    "model_name": model_choice["name"],
                 },
             )
         except ValueError as exc:
@@ -597,8 +765,12 @@ class AIRequestHandler(BaseHTTPRequestHandler):
 
 def run() -> None:
     server = ThreadingHTTPServer((HOST, PORT), AIRequestHandler)
+    default_model = get_model_choice()
     print(f"Server running at http://{HOST}:{PORT}")
-    print(f"Provider: gemini | Model: {get_model()}")
+    print(
+        "Provider: gemini | "
+        f"Default preset: {default_model['key']} | Model: {default_model['model']}"
+    )
     print("Set GEMINI_API_KEY before sending messages.")
     try:
         server.serve_forever()

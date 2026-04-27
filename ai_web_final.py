@@ -474,7 +474,7 @@ def html_page() -> str:
     <header class="topbar">
       <div>
         <h1 class="title">Gemini Web Chat</h1>
-        <div class="meta" id="modelMeta">Preset: <strong>{default_model["name"]}</strong> | Model: <strong>{default_model["model"]}</strong> | Port: <strong>{PORT}</strong></div>
+        <div class="meta" id="modelMeta">Preset: <strong>{default_model["name"]}</strong> | Model: <strong>{default_model["model"]}</strong></div>
         <div class="submeta" id="modelHint">{default_model["description"]} {default_model["legacy"]}</div>
         <div class="submeta" id="legacyNotice">{LEGACY_MODEL_NOTICE}</div>
       </div>
@@ -537,7 +537,7 @@ def html_page() -> str:
       }}
 
       localStorage.setItem(MODEL_STORAGE_KEY, selected.key);
-      modelMeta.innerHTML = `Preset: <strong>${{escapeHtml(selected.name)}}</strong> | Model: <strong>${{escapeHtml(selected.model)}}</strong> | Port: <strong>{PORT}</strong>`;
+      modelMeta.innerHTML = `Preset: <strong>${{escapeHtml(selected.name)}}</strong> | Model: <strong>${{escapeHtml(selected.model)}}</strong>`;
       modelHint.textContent = `${{selected.description}} ${{selected.legacy}}`;
       legacyNotice.textContent = "Legacy Gemini 1.x models are retired. These presets use current supported replacements.";
     }}

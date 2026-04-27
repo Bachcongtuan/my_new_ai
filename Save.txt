@@ -10,7 +10,9 @@ from pathlib import Path
 from urllib import error, parse, request
 
 HOST = "0.0.0.0"
+# Dòng 13: Tự động lấy Port từ Render, nếu không có thì dùng 5000
 PORT = int(os.environ.get("PORT", 5000))
+
 SYSTEM_PROMPT = (
     "You are a practical AI assistant. Give clear, concise, useful answers."
 )
@@ -18,59 +20,55 @@ HISTORY_FILE = Path(__file__).with_name("chat_history.json")
 HISTORY_LOCK = threading.Lock()
 MAX_HISTORY_MESSAGES = max(2, int(os.getenv("MAX_HISTORY_MESSAGES", "16")))
 LEGACY_MODEL_NOTICE = (
-    "Legacy Gemini 1.x models are retired. "
-    "This app maps those old tiers to current supported Gemini models."
+    "Hệ thống đã tự động cập nhật lên các mô hình Gemini mới nhất."
 )
 MODEL_PRESETS = [
     {
         "key": "flash",
         "name": "Gemini 2.5 Flash",
         "model": "gemini-2.5-flash",
-        "description": "Fast balanced default for web chat.",
-        "legacy": "Closest replacement for Gemini 1.5 Flash.",
+        "description": "Cân bằng giữa tốc độ và chất lượng.",
+        "legacy": "",
         "status": "stable",
     },
     {
         "key": "pro",
         "name": "Gemini 2.5 Pro",
         "model": "gemini-2.5-pro",
-        "description": "Best choice for deep reasoning and harder prompts.",
-        "legacy": "Closest replacement for Gemini 1.5 Pro.",
+        "description": "Lập luận chuyên sâu cho các yêu cầu khó.",
+        "legacy": "",
         "status": "stable",
     },
     {
         "key": "flash_lite",
         "name": "Gemini 2.5 Flash-Lite",
         "model": "gemini-2.5-flash-lite",
-        "description": "Lowest-cost and highest-throughput current option.",
-        "legacy": "Closest replacement for Gemini 1.5 Flash-8B.",
+        "description": "Tốc độ phản hồi cực nhanh.",
+        "legacy": "",
         "status": "stable",
     },
     {
         "key": "compat",
         "name": "Gemini 2.0 Flash",
         "model": "gemini-2.0-flash",
-        "description": "Temporary text-first compatibility option.",
-        "legacy": "Closest currently available fallback for Gemini 1.0 Pro.",
+        "description": "Mô hình tương thích văn bản.",
+        "legacy": "",
         "status": "deprecated",
     },
 ]
 MODEL_PRESETS_BY_KEY = {item["key"]: item for item in MODEL_PRESETS}
 DEFAULT_MODEL_KEY = os.getenv("AI_DEFAULT_MODEL_KEY", "flash").strip().lower()
 
-
 def get_default_model_key() -> str:
     if DEFAULT_MODEL_KEY in MODEL_PRESETS_BY_KEY:
         return DEFAULT_MODEL_KEY
     return "flash"
-
 
 def get_model_choice(model_key: str | None = None) -> dict[str, str]:
     key = (model_key or "").strip().lower()
     if key in MODEL_PRESETS_BY_KEY:
         return MODEL_PRESETS_BY_KEY[key]
     return MODEL_PRESETS_BY_KEY[get_default_model_key()]
-
 
 def get_model_catalog_payload(model_key: str | None = None) -> dict:
     selected = get_model_choice(model_key)
@@ -83,10 +81,8 @@ def get_model_catalog_payload(model_key: str | None = None) -> dict:
         "legacy_notice": LEGACY_MODEL_NOTICE,
     }
 
-
 def utc_timestamp() -> str:
     return datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
 
 def load_history() -> list[dict]:
     if not HISTORY_FILE.exists():
@@ -110,16 +106,13 @@ def load_history() -> list[dict]:
             )
     return normalized[-MAX_HISTORY_MESSAGES:]
 
-
 def save_history(history: list[dict]) -> None:
     HISTORY_FILE.write_text(
         json.dumps(history[-MAX_HISTORY_MESSAGES:], ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-
 CHAT_HISTORY = load_history()
-
 
 def add_history(role: str, content: str) -> None:
     with HISTORY_LOCK:
@@ -133,17 +126,14 @@ def add_history(role: str, content: str) -> None:
         del CHAT_HISTORY[:-MAX_HISTORY_MESSAGES]
         save_history(CHAT_HISTORY)
 
-
 def clear_history() -> None:
     with HISTORY_LOCK:
         CHAT_HISTORY.clear()
         save_history(CHAT_HISTORY)
 
-
 def snapshot_history() -> list[dict]:
     with HISTORY_LOCK:
         return [dict(item) for item in CHAT_HISTORY]
-
 
 def post_json(url: str, headers: dict[str, str], payload: dict) -> dict:
     body = json.dumps(payload).encode("utf-8")
@@ -158,11 +148,10 @@ def post_json(url: str, headers: dict[str, str], payload: dict) -> dict:
     except error.URLError as exc:
         raise RuntimeError(f"Network error: {exc.reason}") from exc
 
-
 def call_gemini(history: list[dict], user_message: str, model_code: str) -> str:
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY.")
+        raise RuntimeError("Thiếu GEMINI_API_KEY. Vui lòng cài đặt trong Environment Variables.")
 
     contents = []
     for item in history[-MAX_HISTORY_MESSAGES:]:
@@ -184,20 +173,18 @@ def call_gemini(history: list[dict], user_message: str, model_code: str) -> str:
         parts = response["candidates"][0]["content"]["parts"]
         text = "".join(part.get("text", "") for part in parts).strip()
         if not text:
-            raise RuntimeError(f"Empty Gemini response: {response}")
+            raise RuntimeError(f"Gemini trả về rỗng: {response}")
         return text
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
-        raise RuntimeError(f"Unexpected Gemini response: {response}") from exc
-
+        raise RuntimeError(f"Phản hồi không mong đợi: {response}") from exc
 
 def generate_reply(history: list[dict], user_message: str, model_code: str) -> str:
     return call_gemini(history, user_message, model_code)
 
-
 def html_page() -> str:
     default_model = get_model_choice()
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -217,9 +204,7 @@ def html_page() -> str:
       --danger: #ff7f7f;
     }}
 
-    * {{
-      box-sizing: border-box;
-    }}
+    * {{ box-sizing: border-box; }}
 
     body {{
       margin: 0;
@@ -259,24 +244,9 @@ def html_page() -> str:
       background: linear-gradient(180deg, rgba(255,255,255,0.04), transparent);
     }}
 
-    .title {{
-      margin: 0;
-      font-size: 24px;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-    }}
-
-    .meta {{
-      color: var(--muted);
-      font-size: 14px;
-    }}
-
-    .actions {{
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 10px;
-    }}
+    .title {{ margin: 0; font-size: 24px; font-weight: 700; }}
+    .meta {{ color: var(--muted); font-size: 14px; }}
+    .actions {{ display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }}
 
     button {{
       border: 0;
@@ -284,18 +254,11 @@ def html_page() -> str:
       padding: 12px 16px;
       font: inherit;
       cursor: pointer;
-      transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+      transition: all 120ms ease;
     }}
 
-    button:hover {{
-      transform: translateY(-1px);
-    }}
-
-    button:disabled {{
-      cursor: wait;
-      opacity: 0.6;
-      transform: none;
-    }}
+    button:hover {{ transform: translateY(-1px); }}
+    button:disabled {{ cursor: wait; opacity: 0.6; }}
 
     .ghost {{
       background: rgba(255,255,255,0.06);
@@ -303,17 +266,8 @@ def html_page() -> str:
       border: 1px solid var(--line);
     }}
 
-    .picker {{
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 320px;
-    }}
-
-    .picker span {{
-      color: var(--muted);
-      font-size: 12px;
-    }}
+    .picker {{ display: flex; flex-direction: column; gap: 6px; min-width: 320px; }}
+    .picker span {{ color: var(--muted); font-size: 12px; }}
 
     select {{
       width: 100%;
@@ -323,12 +277,6 @@ def html_page() -> str:
       color: var(--text);
       padding: 11px 14px;
       font: inherit;
-      outline: none;
-    }}
-
-    select:focus {{
-      border-color: rgba(110, 231, 200, 0.55);
-      box-shadow: 0 0 0 4px rgba(110, 231, 200, 0.08);
     }}
 
     .primary {{
@@ -337,13 +285,7 @@ def html_page() -> str:
       font-weight: 700;
     }}
 
-    .chat {{
-      padding: 22px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-    }}
+    .chat {{ padding: 22px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }}
 
     .message {{
       max-width: min(80%, 720px);
@@ -352,45 +294,19 @@ def html_page() -> str:
       border: 1px solid var(--line);
       line-height: 1.5;
       white-space: pre-wrap;
-      word-break: break-word;
       animation: fadeUp 180ms ease;
     }}
 
-    .message.user {{
-      align-self: flex-end;
-      background: var(--user);
-    }}
+    .message.user {{ align-self: flex-end; background: var(--user); }}
+    .message.assistant {{ align-self: flex-start; background: var(--assistant); }}
+    .message .stamp {{ display: block; margin-top: 8px; color: var(--muted); font-size: 12px; }}
 
-    .message.assistant {{
-      align-self: flex-start;
-      background: var(--assistant);
-    }}
-
-    .message .stamp {{
-      display: block;
-      margin-top: 8px;
-      color: var(--muted);
-      font-size: 12px;
-    }}
-
-    .composer {{
-      border-top: 1px solid var(--line);
-      background: var(--panel-2);
-      padding: 18px;
-    }}
-
-    .composer form {{
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 12px;
-      align-items: end;
-    }}
+    .composer {{ border-top: 1px solid var(--line); background: var(--panel-2); padding: 18px; }}
+    .composer form {{ display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }}
 
     textarea {{
       width: 100%;
       min-height: 68px;
-      max-height: 180px;
-      resize: vertical;
       border-radius: 18px;
       border: 1px solid var(--line);
       background: rgba(255,255,255,0.04);
@@ -400,72 +316,16 @@ def html_page() -> str:
       outline: none;
     }}
 
-    textarea:focus {{
-      border-color: rgba(110, 231, 200, 0.55);
-      box-shadow: 0 0 0 4px rgba(110, 231, 200, 0.08);
-    }}
+    .status {{ margin-top: 10px; min-height: 20px; color: var(--muted); font-size: 14px; }}
+    .error {{ color: var(--danger); }}
+    .empty {{ padding: 24px; border: 1px dashed var(--line); border-radius: 18px; color: var(--muted); text-align: center; }}
 
-    .status {{
-      margin-top: 10px;
-      min-height: 20px;
-      color: var(--muted);
-      font-size: 14px;
-    }}
-
-    .submeta {{
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
-    }}
-
-    .error {{
-      color: var(--danger);
-    }}
-
-    .empty {{
-      padding: 24px;
-      border: 1px dashed var(--line);
-      border-radius: 18px;
-      color: var(--muted);
-      background: rgba(255,255,255,0.03);
-    }}
-
-    @keyframes fadeUp {{
-      from {{
-        opacity: 0;
-        transform: translateY(8px);
-      }}
-      to {{
-        opacity: 1;
-        transform: translateY(0);
-      }}
-    }}
+    @keyframes fadeUp {{ from {{ opacity: 0; transform: translateY(8px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 
     @media (max-width: 700px) {{
-      body {{
-        padding: 6px;
-      }}
-
-      .shell {{
-        width: 100%;
-        max-width: 100%;
-        min-height: 92vh;
-        border-radius: 22px;
-      }}
-
-      .topbar {{
-        flex-direction: column;
-        align-items: flex-start;
-      }}
-
-      .composer form {{
-        grid-template-columns: 1fr;
-      }}
-
-      .message {{
-        max-width: 100%;
-      }}
+      .shell {{ width: 100%; min-height: 92vh; border-radius: 22px; }}
+      .topbar {{ flex-direction: column; align-items: flex-start; }}
+      .composer form {{ grid-template-columns: 1fr; }}
     }}
   </style>
 </head>
@@ -475,15 +335,14 @@ def html_page() -> str:
       <div>
         <h1 class="title">Gemini Web Chat</h1>
         <div class="meta" id="modelMeta">Preset: <strong>{default_model["name"]}</strong> | Model: <strong>{default_model["model"]}</strong></div>
-        <div class="submeta" id="modelHint">{default_model["description"]} {default_model["legacy"]}</div>
-        <div class="submeta" id="legacyNotice">{LEGACY_MODEL_NOTICE}</div>
+        <div class="meta" style="font-size: 12px; margin-top: 4px;" id="modelHint">{default_model["description"]}</div>
       </div>
       <div class="actions">
         <label class="picker">
-          <span>Model preset</span>
+          <span>Chọn mô hình</span>
           <select id="modelSelect"></select>
         </label>
-        <button class="ghost" id="clearButton" type="button">Clear history</button>
+        <button class="ghost" id="clearButton" type="button">Xóa lịch sử</button>
       </div>
     </header>
 
@@ -491,8 +350,8 @@ def html_page() -> str:
 
     <footer class="composer">
       <form id="chatForm">
-        <textarea id="messageInput" placeholder="Ask anything. Shift+Enter for a new line." required></textarea>
-        <button class="primary" id="sendButton" type="submit">Send</button>
+        <textarea id="messageInput" placeholder="Nhập tin nhắn... (Shift+Enter để xuống dòng)" required></textarea>
+        <button class="primary" id="sendButton" type="submit">Gửi</button>
       </form>
       <div class="status" id="status"></div>
     </footer>
@@ -507,17 +366,13 @@ def html_page() -> str:
     const modelSelect = document.getElementById("modelSelect");
     const modelMeta = document.getElementById("modelMeta");
     const modelHint = document.getElementById("modelHint");
-    const legacyNotice = document.getElementById("legacyNotice");
     const statusNode = document.getElementById("status");
     const MODEL_STORAGE_KEY = "gemini_web_chat_model_key";
     let modelCatalog = [];
     let defaultModelKey = "{default_model["key"]}";
 
     function escapeHtml(text) {{
-      return text
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
+      return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     }}
 
     function setStatus(message, isError = false) {{
@@ -532,54 +387,45 @@ def html_page() -> str:
 
     function updateModelUi() {{
       const selected = getSelectedModel();
-      if (!selected) {{
-        return;
-      }}
+      if (!selected) return;
 
       localStorage.setItem(MODEL_STORAGE_KEY, selected.key);
+      // Đã xóa hiển thị Port ở đây (Sửa lỗi dòng 541 cũ)
       modelMeta.innerHTML = `Preset: <strong>${{escapeHtml(selected.name)}}</strong> | Model: <strong>${{escapeHtml(selected.model)}}</strong>`;
-      modelHint.textContent = `${{selected.description}} ${{selected.legacy}}`;
-      legacyNotice.textContent = "Legacy Gemini 1.x models are retired. These presets use current supported replacements.";
+      modelHint.textContent = selected.description;
     }}
 
     function renderModels(payload) {{
       modelCatalog = payload.models || [];
       defaultModelKey = payload.default_model_key || defaultModelKey;
       const storedKey = localStorage.getItem(MODEL_STORAGE_KEY);
-      const initialKey = modelCatalog.some((item) => item.key === storedKey)
-        ? storedKey
-        : defaultModelKey;
+      const initialKey = modelCatalog.some((item) => item.key === storedKey) ? storedKey : defaultModelKey;
 
       modelSelect.innerHTML = "";
       for (const item of modelCatalog) {{
         const option = document.createElement("option");
         option.value = item.key;
-        option.textContent = `${{item.name}} | ${{item.model}}`;
+        option.textContent = `${{item.name}}`;
         modelSelect.appendChild(option);
       }}
-
       modelSelect.value = initialKey;
-      legacyNotice.textContent = payload.legacy_notice || legacyNotice.textContent;
       updateModelUi();
     }}
 
     function renderHistory(history) {{
       chat.innerHTML = "";
       if (!history.length) {{
-        chat.innerHTML = '<div class="empty">Không có tin nhắn, hãy nhắn một thứ gì đó.</div>';
+        // Việt hóa thông báo trống
+        chat.innerHTML = '<div class="empty">Không có tin nhắn. Hãy nhắn một thứ gì đó để bắt đầu!</div>';
         return;
       }}
 
       for (const item of history) {{
         const node = document.createElement("article");
         node.className = `message ${{item.role}}`;
-        node.innerHTML = `
-          <div>${{escapeHtml(item.content)}}</div>
-          <span class="stamp">${{item.role}} | ${{item.created_at}}</span>
-        `;
+        node.innerHTML = `<div>${{escapeHtml(item.content)}}</div><span class="stamp">${{item.role === 'user' ? 'Bạn' : 'AI'}} | ${{item.created_at}}</span>`;
         chat.appendChild(node);
       }}
-
       chat.scrollTop = chat.scrollHeight;
     }}
 
@@ -595,72 +441,45 @@ def html_page() -> str:
       renderHistory(data.history || []);
     }}
 
-    async function sendMessage(message) {{
-      const selected = getSelectedModel();
-      const response = await fetch("/api/chat", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{
-          message,
-          model_key: selected ? selected.key : defaultModelKey
-        }})
-      }});
-      const data = await response.json();
-      if (!response.ok) {{
-        throw new Error(data.error || "Request failed.");
-      }}
-      renderHistory(data.history || []);
-      return data;
-    }}
-
     form.addEventListener("submit", async (event) => {{
       event.preventDefault();
       const message = input.value.trim();
-      if (!message) {{
-        return;
-      }}
+      if (!message) return;
 
       input.disabled = true;
       sendButton.disabled = true;
-      clearButton.disabled = true;
-      setStatus("Gemini is thinking...");
+      setStatus("AI đang suy nghĩ...");
 
       try {{
-        const result = await sendMessage(message);
+        const selected = getSelectedModel();
+        const response = await fetch("/api/chat", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ message, model_key: selected.key }})
+        }});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Lỗi kết nối.");
+        
+        renderHistory(data.history || []);
         input.value = "";
-        setStatus(`Ready. Using ${{result.model_name}}.`);
+        setStatus("Sẵn sàng.");
       }} catch (err) {{
         setStatus(err.message, true);
       }} finally {{
         input.disabled = false;
         sendButton.disabled = false;
-        clearButton.disabled = false;
         input.focus();
       }}
     }});
 
     clearButton.addEventListener("click", async () => {{
-      clearButton.disabled = true;
-      try {{
-        const response = await fetch("/api/clear", {{ method: "POST" }});
-        const data = await response.json();
-        renderHistory(data.history || []);
-        setStatus("History cleared.");
-      }} catch (err) {{
-        setStatus("Could not clear history.", true);
-      }} finally {{
-        clearButton.disabled = false;
-      }}
+      if (!confirm("Xóa toàn bộ lịch sử chat?")) return;
+      await fetch("/api/clear", {{ method: "POST" }});
+      renderHistory([]);
     }});
 
-    modelSelect.addEventListener("change", () => {{
-      updateModelUi();
-      const selected = getSelectedModel();
-      if (selected) {{
-        setStatus(`Model changed to ${{selected.name}}.`);
-      }}
-    }});
-
+    modelSelect.addEventListener("change", updateModelUi);
+    
     input.addEventListener("keydown", (event) => {{
       if (event.key === "Enter" && !event.shiftKey) {{
         event.preventDefault();
@@ -668,18 +487,13 @@ def html_page() -> str:
       }}
     }});
 
-    Promise.all([loadModels(), loadHistory()])
-      .then(() => setStatus("Ready."))
-      .catch(() => setStatus("Could not load chat history.", true));
+    loadModels().then(loadHistory);
   </script>
 </body>
 </html>
 """
 
-
 class AIRequestHandler(BaseHTTPRequestHandler):
-    server_version = "AIWebChat/1.0"
-
     def log_message(self, format: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {format % args}")
 
@@ -702,84 +516,48 @@ class AIRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/":
             self.send_html(HTTPStatus.OK, html_page())
-            return
-        if self.path == "/api/models":
+        elif self.path == "/api/models":
             self.send_json(HTTPStatus.OK, get_model_catalog_payload())
-            return
-        if self.path == "/api/history":
+        elif self.path == "/api/history":
             self.send_json(HTTPStatus.OK, {"history": snapshot_history()})
-            return
-        self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
+        else:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
 
     def do_POST(self) -> None:
         if self.path == "/api/chat":
             self.handle_chat()
-            return
-        if self.path == "/api/clear":
+        elif self.path == "/api/clear":
             clear_history()
-            self.send_json(HTTPStatus.OK, {"history": snapshot_history()})
-            return
-        self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
-
-    def read_json_body(self) -> dict:
-        try:
-            size = int(self.headers.get("Content-Length", "0"))
-        except ValueError:
-            size = 0
-        raw = self.rfile.read(size) if size > 0 else b"{}"
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ValueError("Body must be valid JSON.") from exc
-        if not isinstance(payload, dict):
-            raise ValueError("JSON body must be an object.")
-        return payload
+            self.send_json(HTTPStatus.OK, {"history": []})
+        else:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
 
     def handle_chat(self) -> None:
         try:
-            payload = self.read_json_body()
+            size = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(size).decode("utf-8"))
             message = str(payload.get("message", "")).strip()
-            if not message:
-                raise ValueError("Message cannot be empty.")
-
             model_choice = get_model_choice(str(payload.get("model_key", "")))
-            history = snapshot_history()
-            reply = generate_reply(history, message, model_choice["model"])
+            
+            reply = generate_reply(snapshot_history(), message, model_choice["model"])
             add_history("user", message)
             add_history("assistant", reply)
-            self.send_json(
-                HTTPStatus.OK,
-                {
-                    "reply": reply,
-                    "history": snapshot_history(),
-                    "provider": "gemini",
-                    "model": model_choice["model"],
-                    "model_key": model_choice["key"],
-                    "model_name": model_choice["name"],
-                },
-            )
-        except ValueError as exc:
-            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            
+            self.send_json(HTTPStatus.OK, {
+                "reply": reply,
+                "history": snapshot_history(),
+                "model_name": model_choice["name"]
+            })
         except Exception as exc:
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
 
-
 def run() -> None:
     server = ThreadingHTTPServer((HOST, PORT), AIRequestHandler)
-    default_model = get_model_choice()
-    print(f"Server running at http://{HOST}:{PORT}")
-    print(
-        "Provider: gemini | "
-        f"Default preset: {default_model['key']} | Model: {default_model['model']}"
-    )
-    print("Set GEMINI_API_KEY before sending messages.")
+    print(f"Máy chủ đang chạy tại Port: {PORT}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nServer stopped.")
-    finally:
         server.server_close()
-
 
 if __name__ == "__main__":
     run()

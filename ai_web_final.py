@@ -3,297 +3,345 @@
 import json
 import os
 import threading
-import time
 import uuid
 from datetime import datetime
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib import parse, request
+from urllib import error, parse, request
 
-# --- CẤU HÌNH HỆ THỐNG ---
+# --- CONFIGURATION ---
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 5000))
-AUTO_DELETE_SECONDS = 300  # 5 phút tự hủy nếu không có hoạt động
-LAST_ACTIVITY_TIME = time.time()
-
 SYSTEM_PROMPT = "You are a practical AI assistant. Give clear, concise, useful answers."
-HISTORY_DIR = Path(__file__).parent / "sessions"
-HISTORY_DIR.mkdir(exist_ok=True)
-HISTORY_LOCK = threading.Lock()
-MAX_HISTORY_MESSAGES = 20
+
+# Quản lý phiên và lịch sử
+SESSIONS_DIR = Path(__file__).parent / "sessions"
+SESSIONS_DIR.mkdir(exist_ok=True)
+SESSION_LOCK = threading.Lock()
+MAX_HISTORY = 20
 
 MODEL_PRESETS = [
-    {"key": "flash", "name": "Gemini 2.5 Flash", "model": "gemini-2.5-flash", "desc": "Fast balanced default for web chat. Closest replacement for Gemini 1.5 Flash."},
-    {"key": "pro", "name": "Gemini 2.5 Pro", "model": "gemini-2.5-pro", "desc": "Complex reasoning and creativity for advanced tasks."},
-    {"key": "flash_lite", "name": "Gemini 2.5 Flash-Lite", "model": "gemini-2.5-flash-lite", "desc": "Lightweight and fastest response for simple queries."},
+    {"key": "flash", "name": "Gemini 2.5 Flash", "model": "gemini-2.5-flash", "desc": "Cân bằng tốc độ và chất lượng."},
+    {"key": "pro", "name": "Gemini 2.5 Pro", "model": "gemini-2.5-pro", "desc": "Lập luận chuyên sâu cho yêu cầu khó."},
+    {"key": "flash_lite", "name": "Gemini 2.5 Flash-Lite", "model": "gemini-2.5-flash-lite", "desc": "Phản hồi cực nhanh."},
 ]
-MODEL_PRESETS_BY_KEY = {item["key"]: item for item in MODEL_PRESETS}
-SESSIONS = {}
+MODEL_MAP = {m["key"]: m for m in MODEL_PRESETS}
 
-def update_activity():
-    global LAST_ACTIVITY_TIME
-    LAST_ACTIVITY_TIME = time.time()
+def get_session_history(sid: str) -> list:
+    path = SESSIONS_DIR / f"{sid}.json"
+    if not path.exists(): return []
+    try: return json.loads(path.read_text(encoding="utf-8"))
+    except: return []
 
-def auto_delete_worker():
-    """Xóa sạch dữ liệu nếu cả hệ thống không có ai dùng trong 5 phút"""
-    global SESSIONS
-    while True:
-        time.sleep(5) # Kiểm tra mỗi 5 giây
-        if time.time() - LAST_ACTIVITY_TIME > AUTO_DELETE_SECONDS:
-            with HISTORY_LOCK:
-                if SESSIONS or list(HISTORY_DIR.glob("*.json")):
-                    SESSIONS.clear()
-                    for f in HISTORY_DIR.glob("*.json"):
-                        try: f.unlink()
-                        except: pass
-                    print(f"[{datetime.now()}] Hệ thống đã tự hủy dữ liệu sau 5p vắng bóng.")
+def save_session_history(sid: str, history: list):
+    path = SESSIONS_DIR / f"{sid}.json"
+    path.write_text(json.dumps(history[-MAX_HISTORY:], ensure_ascii=False), encoding="utf-8")
 
-def html_page():
+# --- HTML & CSS UI ---
+def html_page() -> str:
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gemini Web Chat</title>
+  <title>Gemini Crystal UI</title>
   <style>
     :root {{
-      --bg: #0f172a; --card: #1e293b; --border: rgba(255, 255, 255, 0.1);
-      --text-main: #f1f5f9; --text-dim: #94a3b8; --accent: #10b981;
-      --user-msg: #334155; --ai-msg: #1e293b;
+      --bg: #030712;
+      --glass: rgba(17, 24, 39, 0.7);
+      --border: rgba(255, 255, 255, 0.08);
+      --accent: #10b981;
+      --accent-glow: rgba(16, 185, 129, 0.2);
+      --text: #f9fafb;
+      --text-dim: #9ca3af;
+      --user-msg: #1f2937;
+      --ai-msg: rgba(31, 41, 55, 0.4);
     }}
-    * {{ box-sizing: border-box; }}
+
+    * {{ box-sizing: border-box; -webkit-font-smoothing: antialiased; }}
+    
     body {{
-      margin: 0; padding: 20px; font-family: 'Inter', system-ui, sans-serif;
-      background: #020617; color: var(--text-main);
-      display: flex; justify-content: center; align-items: center; min-height: 100vh;
+      margin: 0; padding: 20px; min-height: 100vh;
+      background: var(--bg);
+      background-image: 
+        radial-gradient(circle at 0% 0%, rgba(16, 185, 129, 0.05) 0%, transparent 50%),
+        radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      color: var(--text);
+      display: flex; justify-content: center; align-items: center;
     }}
-    .container {{
-      width: 100%; max-width: 1100px; height: 90vh;
-      background: var(--card); border: 1px solid var(--border);
-      border-radius: 16px; display: flex; flex-direction: column;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); overflow: hidden;
+
+    .app-container {{
+      width: 100%; max-width: 1200px; height: 90vh;
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      display: flex; flex-direction: column;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
     }}
+
     .header {{
-      padding: 24px; border-bottom: 1px solid var(--border);
-      display: flex; justify-content: space-between; align-items: flex-start;
+      padding: 20px 32px;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: rgba(255,255,255,0.02);
     }}
-    .brand h1 {{ margin: 0; font-size: 24px; font-weight: 600; }}
-    .brand p {{ margin: 4px 0 0; font-size: 13px; color: var(--text-dim); line-height: 1.5; }}
-    .controls {{ display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }}
+
+    .brand h1 {{ margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }}
+    .brand span {{ font-size: 12px; color: var(--text-dim); }}
+
+    .controls {{ display: flex; gap: 12px; align-items: center; }}
     
-    .chat-area {{ flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; background: rgba(0,0,0,0.1); }}
-    .msg {{ max-width: 80%; padding: 14px 18px; border-radius: 12px; font-size: 15px; line-height: 1.6; border: 1px solid var(--border); position: relative; }}
-    .user {{ align-self: flex-end; background: var(--user-msg); border-bottom-right-radius: 4px; }}
-    .assistant {{ align-self: flex-start; background: var(--ai-msg); border-bottom-left-radius: 4px; }}
+    select, button.secondary {{
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      color: white; padding: 8px 14px; border-radius: 10px;
+      font-size: 13px; cursor: pointer; transition: 0.2s;
+    }}
     
-    .input-area {{ padding: 24px; border-top: 1px solid var(--border); }}
+    button.secondary:hover {{ background: rgba(255,255,255,0.1); }}
+
+    .chat-view {{
+      flex: 1; overflow-y: auto; padding: 32px;
+      display: flex; flex-direction: column; gap: 24px;
+      scroll-behavior: smooth;
+    }}
+
+    /* Thanh cuộn đẹp */
+    .chat-view::-webkit-scrollbar {{ width: 6px; }}
+    .chat-view::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 10px; }}
+
+    .message {{
+      max-width: 80%; padding: 16px 20px; border-radius: 18px;
+      line-height: 1.6; font-size: 15px; position: relative;
+      animation: slideUp 0.3s ease-out;
+    }}
+
+    .message.user {{
+      align-self: flex-end; background: var(--user-msg);
+      border-bottom-right-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.05);
+    }}
+
+    .message.assistant {{
+      align-self: flex-start; background: var(--ai-msg);
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }}
+
+    .input-wrapper {{
+      padding: 24px 32px; border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+    }}
+
     .input-box {{
-      position: relative; display: flex; align-items: flex-end;
-      background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border);
-      border-radius: 12px; padding: 12px; gap: 10px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 16px; padding: 8px;
+      display: flex; align-items: flex-end; gap: 12px;
+      transition: 0.3s;
     }}
+
+    .input-box:focus-within {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-glow);
+    }}
+
     textarea {{
       flex: 1; background: transparent; border: none; color: white;
-      resize: none; font-family: inherit; font-size: 15px; outline: none; padding: 8px; max-height: 200px;
+      padding: 12px; resize: none; outline: none; font-size: 15px;
+      max-height: 200px; font-family: inherit;
     }}
-    .send-btn {{
-      background: #d1fae5; color: #064e3b; border: none; padding: 10px 24px;
-      border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s;
+
+    .btn-send {{
+      background: var(--accent); color: #064e3b;
+      border: none; width: 44px; height: 44px; border-radius: 12px;
+      cursor: pointer; font-weight: bold; transition: 0.2s;
+      display: flex; align-items: center; justify-content: center;
     }}
-    .send-btn:hover {{ background: var(--accent); color: white; }}
-    .footer-note {{ margin-top: 10px; font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; }}
-    
-    select, .clear-btn {{
-      background: #0f172a; color: white; border: 1px solid var(--border);
-      padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px;
+
+    .btn-send:hover {{ transform: scale(1.05); filter: brightness(1.1); }}
+    .btn-send:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+
+    @keyframes slideUp {{
+      from {{ opacity: 0; transform: translateY(10px); }}
+      to {{ opacity: 1; transform: translateY(0); }}
     }}
-    .empty-state {{ text-align: center; color: var(--text-dim); margin-top: 40px; font-size: 14px; }}
-  </style>
+
+    @media (max-width: 768px) {{
+      body {{ padding: 0; }}
+      .app-container {{ height: 100vh; border-radius: 0; border: none; }}
+      .header {{ padding: 16px; }}
+    </style>
 </head>
 <body>
-  <div class="container">
+  <div class="app-container">
     <header class="header">
       <div class="brand">
-        <h1>Gemini Web Chat</h1>
-        <p id="modelDesc">Fast balanced default for web chat. Closest replacement for Gemini 1.5 Flash.</p>
+        <h1>Gemini AI</h1>
+        <span id="status">Sẵn sàng kết nối</span>
       </div>
       <div class="controls">
-        <div style="font-size:12px; color:var(--text-dim)">Model preset</div>
-        <div style="display:flex; gap:10px;">
-          <select id="modelSelect">
-            {"".join([f'<option value="{m["key"]}">{m["name"]} | {m["model"]}</option>' for m in MODEL_PRESETS])}
-          </select>
-          <button class="clear-btn" id="clearBtn">Clear history</button>
-        </div>
+        <select id="modelSelect">
+          {"".join([f'<option value="{m["key"]}">{m["name"]}</option>' for m in MODEL_PRESETS])}
+        </select>
+        <button class="secondary" onclick="clearHistory()">Xóa Chat</button>
       </div>
     </header>
 
-    <div class="chat-area" id="chat">
-        <div class="empty-state">No messages yet. Set GEMINI_API_KEY, then start chatting.</div>
-    </div>
+    <div class="chat-view" id="chat"></div>
 
-    <div class="input-area">
+    <div class="input-wrapper">
       <form id="chatForm" class="input-box">
-        <textarea id="msgInput" rows="1" placeholder="Ask anything. Shift+Enter for a new line."></textarea>
-        <button type="submit" class="send-btn">Send</button>
+        <textarea id="msgIn" rows="1" placeholder="Hỏi bất cứ điều gì..." required></textarea>
+        <button type="submit" class="btn-send" id="btnSend">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
       </form>
-      <div class="footer-note">
-        <span id="status">Ready.</span>
-        <span id="sidDisplay" style="opacity:0.5"></span>
-      </div>
     </div>
   </div>
 
   <script>
-    let sessionId = localStorage.getItem("chat_sid") || ("m_" + Math.random().toString(36).substring(2, 10));
-    localStorage.setItem("chat_sid", sessionId);
-    document.getElementById("sidDisplay").textContent = "ID: " + sessionId;
-
     const chat = document.getElementById("chat");
-    const input = document.getElementById("msgInput");
+    const input = document.getElementById("msgIn");
+    const form = document.getElementById("chatForm");
+    const btn = document.getElementById("btnSend");
     const status = document.getElementById("status");
-    const modelSelect = document.getElementById("modelSelect");
-    const displayedIds = new Set();
 
-    function append(role, text, id = null) {{
-      if(id && displayedIds.has(id)) return null;
-      const empty = chat.querySelector(".empty-state");
-      if(empty) empty.remove();
-      
-      if(id) displayedIds.add(id);
+    // Lấy ID định danh máy khách
+    let sid = localStorage.getItem("sid") || "s_" + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem("sid", sid);
+
+    function append(role, text) {{
       const div = document.createElement("div");
-      div.className = `msg ${{role}}`;
-      div.textContent = text;
+      div.className = `message ${{role}}`;
+      div.innerText = text;
       chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
       return div;
     }}
 
-    document.getElementById("chatForm").onsubmit = async (e) => {{
+    form.onsubmit = async (e) => {{
       e.preventDefault();
-      const msg = input.value.trim(); if(!msg) return;
-      input.value = ""; input.disabled = true;
-      status.textContent = "Thinking...";
+      const val = input.value.trim(); if(!val) return;
       
-      append("user", msg, "u" + Date.now());
-      const aiDiv = append("assistant", "...", "a" + Date.now());
+      input.value = ""; input.style.height = "auto";
+      append("user", val);
+      const aiMsg = append("assistant", "...");
       
+      input.disabled = true; btn.disabled = true;
+      status.innerText = "Đang xử lý...";
+
       try {{
         const res = await fetch("/api/chat", {{
           method: "POST",
-          body: JSON.stringify({{ message: msg, session_id: sessionId, model_key: modelSelect.value }})
+          body: JSON.stringify({{ 
+            message: val, 
+            sid: sid, 
+            model: document.getElementById("modelSelect").value 
+          }})
         }});
-        const reader = res.body.getReader();
-        let full = "";
-        while (true) {{
-          const {{ value, done }} = await reader.read();
-          if (done) break;
-          full += new TextDecoder().decode(value);
-          aiDiv.textContent = full;
-          chat.scrollTop = chat.scrollHeight;
-        }}
-        status.textContent = "Ready.";
-      }} catch(e) {{ 
-        aiDiv.textContent = "Error: Connection lost."; 
-        status.textContent = "Error.";
-      }} finally {{ input.disabled = false; input.focus(); }}
+        const data = await res.json();
+        aiMsg.innerText = data.reply || "Lỗi phản hồi.";
+      }} catch(err) {{
+        aiMsg.innerText = "Không thể kết nối API.";
+      }} finally {{
+        input.disabled = false; btn.disabled = false;
+        status.innerText = "Sẵn sàng";
+        input.focus();
+      }}
     }};
 
-    async function sync() {{
-      try {{
-        const res = await fetch("/api/history?session_id=" + sessionId);
-        const data = await res.json();
-        if(data.history.length === 0 && displayedIds.size > 0) {{
-            chat.innerHTML = '<div class="empty-state">History cleared.</div>';
-            displayedIds.clear();
-        }} else {{
-            data.history.forEach(m => append(m.role, m.content, m.id));
-        }}
-      }} catch(e) {{}}
+    async function clearHistory() {{
+      if(!confirm("Xóa toàn bộ hội thoại?")) return;
+      await fetch("/api/clear?sid=" + sid, {{ method: "POST" }});
+      chat.innerHTML = "";
     }}
 
-    document.getElementById("clearBtn").onclick = () => {{
-        localStorage.removeItem("chat_sid");
-        location.reload();
+    // Tự động giãn nở textarea
+    input.oninput = function() {{
+      this.style.height = "auto";
+      this.style.height = (this.scrollHeight) + "px";
     }};
 
-    // Tự động check mỗi 5 giây
-    setInterval(sync, 5000);
-    sync();
+    // Load lịch sử cũ
+    (async () => {{
+      const res = await fetch("/api/history?sid=" + sid);
+      const data = await res.json();
+      data.history.forEach(m => append(m.role, m.content));
+    }})();
   </script>
 </body>
 </html>
 """
 
-class AIRequestHandler(BaseHTTPRequestHandler):
+class AIHandler(BaseHTTPRequestHandler):
+    def send_json(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        update_activity()
-        if self.path.startswith("/api/history"):
-            qs = parse.parse_qs(parse.urlparse(self.path).query)
-            sid = qs.get("session_id", ["default"])[0]
-            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
-            with HISTORY_LOCK:
-                # Ưu tiên đọc từ file để tránh mất dữ liệu khi server restart
-                f = HISTORY_DIR / f"{sid}.json"
-                if f.exists() and sid not in SESSIONS:
-                    try: SESSIONS[sid] = json.loads(f.read_text(encoding="utf-8"))
-                    except: SESSIONS[sid] = []
-                hist = SESSIONS.get(sid, [])
-                self.wfile.write(json.dumps({"history": hist}).encode())
-        else:
-            self.send_response(200); self.send_header("Content-Type", "text/html"); self.end_headers()
-            self.wfile.write(html_page().encode())
+        if self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html_page().encode("utf-8"))
+        elif self.path.startswith("/api/history"):
+            params = parse.parse_qs(parse.urlparse(self.path).query)
+            sid = params.get("sid", ["default"])[0]
+            self.send_json({"history": get_session_history(sid)})
 
     def do_POST(self):
-        update_activity()
-        if self.path == "/api/chat":
-            size = int(self.headers.get('Content-Length', 0))
-            data = json.loads(self.rfile.read(size).decode())
-            self.handle_chat(data)
+        content_len = int(self.headers.get('Content-Length', 0))
+        data = json.loads(self.rfile.read(content_len).decode('utf-8'))
 
-    def handle_chat(self, data):
-        self.send_response(200); self.send_header("Content-Type", "text/plain"); self.end_headers()
-        msg = data.get("message", ""); sid = data.get("session_id", "default")
-        model = MODEL_PRESETS_BY_KEY.get(data.get("model_key"), MODEL_PRESETS[0])["model"]
-        
-        try:
+        if self.path == "/api/chat":
+            sid = data.get("sid", "default")
+            msg = data.get("message", "")
+            model_key = data.get("model", "flash")
+            model_code = MODEL_MAP.get(model_key, MODEL_PRESETS[0])["model"]
+            
+            # API CALL
             api_key = os.getenv("GEMINI_API_KEY", "").strip()
-            with HISTORY_LOCK:
-                if sid not in SESSIONS:
-                    f = HISTORY_DIR / f"{sid}.json"
-                    SESSIONS[sid] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
-                hist = SESSIONS[sid]
+            history = get_session_history(sid)
             
-            ctx = [{"role": "user" if h["role"] == "user" else "model", "parts": [{"text": h["content"]}]} for h in hist]
-            ctx.append({"role": "user", "parts": [{"text": msg}]})
-            
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            payload = {"contents": ctx, "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]}}
-            
-            req = request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
-            with request.urlopen(req) as res:
-                ans = json.loads(res.read().decode())["candidates"][0]["content"]["parts"][0]["text"]
-            
-            # Gửi từng từ để tạo hiệu ứng mượt
-            acc = ""
-            for word in ans.split(' '):
-                self.wfile.write((word + " ").encode()); self.wfile.flush()
-                acc += word + " "; time.sleep(0.01)
-            
-            with HISTORY_LOCK:
-                SESSIONS[sid].append({"role": "user", "content": msg, "id": str(uuid.uuid4())})
-                SESSIONS[sid].append({"role": "assistant", "content": acc.strip(), "id": str(uuid.uuid4())})
-                SESSIONS[sid] = SESSIONS[sid][-MAX_HISTORY_MESSAGES:]
-                # Lưu file ngay lập tức
-                (HISTORY_DIR / f"{sid}.json").write_text(json.dumps(SESSIONS[sid], ensure_ascii=False), encoding="utf-8")
-        except Exception as e:
-            self.wfile.write(f"Error: {str(e)}".encode())
+            contents = [{"role": "user" if h["role"] == "user" else "model", "parts": [{"text": h["content"]}]} for h in history]
+            contents.append({"role": "user", "parts": [{"text": msg}]})
+
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_code}:generateContent?key={api_key}"
+                payload = {"contents": contents, "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]}}
+                req = request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+                
+                with request.urlopen(req) as response:
+                    res_data = json.loads(response.read().decode())
+                    reply = res_data["candidates"][0]["content"]["parts"][0]["text"]
+                
+                # Cập nhật lịch sử
+                history.append({"role": "user", "content": msg})
+                history.append({"role": "assistant", "content": reply})
+                save_session_history(sid, history)
+                
+                self.send_json({"reply": reply})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+
+        elif self.path.startswith("/api/clear"):
+            params = parse.parse_qs(parse.urlparse(self.path).query)
+            sid = params.get("sid", ["default"])[0]
+            (SESSIONS_DIR / f"{sid}.json").unlink(missing_ok=True)
+            self.send_json({"status": "cleared"})
 
 def run():
-    # Khởi động luồng tự hủy dữ liệu
-    threading.Thread(target=auto_delete_worker, daemon=True).start()
-    print(f"UI Pro Server running on port {PORT} (Auto-sync: 5s, Auto-clear: 5m)")
-    ThreadingHTTPServer((HOST, PORT), AIRequestHandler).serve_forever()
+    server = ThreadingHTTPServer((HOST, PORT), AIHandler)
+    print(f"Server chạy tại Port: {PORT}")
+    server.serve_forever()
 
 if __name__ == "__main__":
     run()

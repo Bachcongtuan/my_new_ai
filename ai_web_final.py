@@ -9,9 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import error, parse, request
 
-
 HOST = "0.0.0.0"
-PORT = 5000
+PORT = int(os.environ.get("PORT", 5000))
 SYSTEM_PROMPT = (
     "You are a practical AI assistant. Give clear, concise, useful answers."
 )

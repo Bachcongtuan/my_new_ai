@@ -18,7 +18,7 @@ PORT = int(os.environ.get("PORT", 5000))
 AUTO_DELETE_SECONDS = 300 
 LAST_ACTIVITY_TIME = time.time()
 
-SYSTEM_PROMPT = "You are a practical AI assistant. Give clear, concise, useful answers."
+SYSTEM_PROMPT = "Bạn là một trợ lý AI thực tế và nói tiếng việt. Hãy đưa ra những câu trả lời rõ ràng, ngắn gọn và hữu ích."
 # Folder chứa các file lịch sử riêng biệt
 HISTORY_DIR = Path(__file__).parent / "sessions"
 HISTORY_DIR.mkdir(exist_ok=True)

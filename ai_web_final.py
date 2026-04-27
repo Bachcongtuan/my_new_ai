@@ -566,7 +566,7 @@ def html_page() -> str:
     function renderHistory(history) {{
       chat.innerHTML = "";
       if (!history.length) {{
-        chat.innerHTML = '<div class="empty">No messages yet. Set GEMINI_API_KEY, then start chatting.</div>';
+        chat.innerHTML = '<div class="empty">Không có tin nhắn, hãy nhắn một thứ gì đó.</div>';
         return;
       }}
 

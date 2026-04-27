@@ -10,21 +10,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib import parse, request
 
-# --- CONFIG ---
+# --- CẤU HÌNH HỆ THỐNG ---
 HOST = "0.0.0.0"
 PORT = int(os.environ.get("PORT", 5000))
-AUTO_DELETE_SECONDS = 900
+AUTO_DELETE_SECONDS = 300  # 5 phút tự hủy nếu không có hoạt động
 LAST_ACTIVITY_TIME = time.time()
 
 SYSTEM_PROMPT = "You are a practical AI assistant. Give clear, concise, useful answers."
 HISTORY_DIR = Path(__file__).parent / "sessions"
 HISTORY_DIR.mkdir(exist_ok=True)
 HISTORY_LOCK = threading.Lock()
+MAX_HISTORY_MESSAGES = 20
 
 MODEL_PRESETS = [
-    {"key": "flash", "name": "Gemini 2.5 Flash", "model": "gemini-2.5-flash", "desc": "Fast balanced default for web chat."},
-    {"key": "pro", "name": "Gemini 2.5 Pro", "model": "gemini-2.5-pro", "desc": "Complex reasoning and creativity."},
-    {"key": "flash_lite", "name": "Gemini 2.5 Flash-Lite", "model": "gemini-2.5-flash-lite", "desc": "Lightweight and fastest response."},
+    {"key": "flash", "name": "Gemini 2.5 Flash", "model": "gemini-2.5-flash", "desc": "Fast balanced default for web chat. Closest replacement for Gemini 1.5 Flash."},
+    {"key": "pro", "name": "Gemini 2.5 Pro", "model": "gemini-2.5-pro", "desc": "Complex reasoning and creativity for advanced tasks."},
+    {"key": "flash_lite", "name": "Gemini 2.5 Flash-Lite", "model": "gemini-2.5-flash-lite", "desc": "Lightweight and fastest response for simple queries."},
 ]
 MODEL_PRESETS_BY_KEY = {item["key"]: item for item in MODEL_PRESETS}
 SESSIONS = {}
@@ -34,9 +35,10 @@ def update_activity():
     LAST_ACTIVITY_TIME = time.time()
 
 def auto_delete_worker():
+    """Xóa sạch dữ liệu nếu cả hệ thống không có ai dùng trong 5 phút"""
     global SESSIONS
     while True:
-        time.sleep(5)
+        time.sleep(5) # Kiểm tra mỗi 5 giây
         if time.time() - LAST_ACTIVITY_TIME > AUTO_DELETE_SECONDS:
             with HISTORY_LOCK:
                 if SESSIONS or list(HISTORY_DIR.glob("*.json")):
@@ -44,6 +46,7 @@ def auto_delete_worker():
                     for f in HISTORY_DIR.glob("*.json"):
                         try: f.unlink()
                         except: pass
+                    print(f"[{datetime.now()}] Hệ thống đã tự hủy dữ liệu sau 5p vắng bóng.")
 
 def html_page():
     return f"""<!DOCTYPE html>
@@ -54,14 +57,9 @@ def html_page():
   <title>Gemini Web Chat</title>
   <style>
     :root {{
-      --bg: #0f172a;
-      --card: #1e293b;
-      --border: rgba(255, 255, 255, 0.1);
-      --text-main: #f1f5f9;
-      --text-dim: #94a3b8;
-      --accent: #10b981;
-      --user-msg: #334155;
-      --ai-msg: #1e293b;
+      --bg: #0f172a; --card: #1e293b; --border: rgba(255, 255, 255, 0.1);
+      --text-main: #f1f5f9; --text-dim: #94a3b8; --accent: #10b981;
+      --user-msg: #334155; --ai-msg: #1e293b;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -84,7 +82,7 @@ def html_page():
     .controls {{ display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }}
     
     .chat-area {{ flex: 1; padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; background: rgba(0,0,0,0.1); }}
-    .msg {{ max-width: 80%; padding: 14px 18px; border-radius: 12px; font-size: 15px; line-height: 1.6; border: 1px solid var(--border); }}
+    .msg {{ max-width: 80%; padding: 14px 18px; border-radius: 12px; font-size: 15px; line-height: 1.6; border: 1px solid var(--border); position: relative; }}
     .user {{ align-self: flex-end; background: var(--user-msg); border-bottom-right-radius: 4px; }}
     .assistant {{ align-self: flex-start; background: var(--ai-msg); border-bottom-left-radius: 4px; }}
     
@@ -92,23 +90,24 @@ def html_page():
     .input-box {{
       position: relative; display: flex; align-items: flex-end;
       background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border);
-      border-radius: 12px; padding: 12px;
+      border-radius: 12px; padding: 12px; gap: 10px;
     }}
     textarea {{
       flex: 1; background: transparent; border: none; color: white;
-      resize: none; font-family: inherit; font-size: 15px; outline: none; padding: 8px;
+      resize: none; font-family: inherit; font-size: 15px; outline: none; padding: 8px; max-height: 200px;
     }}
     .send-btn {{
-      background: #d1fae5; color: #064e3b; border: none; padding: 10px 20px;
+      background: #d1fae5; color: #064e3b; border: none; padding: 10px 24px;
       border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s;
     }}
     .send-btn:hover {{ background: var(--accent); color: white; }}
-    .footer-note {{ margin-top: 10px; font-size: 12px; color: var(--text-dim); }}
+    .footer-note {{ margin-top: 10px; font-size: 12px; color: var(--text-dim); display: flex; justify-content: space-between; }}
     
-    select, button.clear-btn {{
-      background: #1e293b; color: white; border: 1px solid var(--border);
-      padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    select, .clear-btn {{
+      background: #0f172a; color: white; border: 1px solid var(--border);
+      padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px;
     }}
+    .empty-state {{ text-align: center; color: var(--text-dim); margin-top: 40px; font-size: 14px; }}
   </style>
 </head>
 <body>
@@ -124,25 +123,31 @@ def html_page():
           <select id="modelSelect">
             {"".join([f'<option value="{m["key"]}">{m["name"]} | {m["model"]}</option>' for m in MODEL_PRESETS])}
           </select>
-          <button class="clear-btn" onclick="location.reload()">Clear history</button>
+          <button class="clear-btn" id="clearBtn">Clear history</button>
         </div>
       </div>
     </header>
 
-    <div class="chat-area" id="chat"></div>
+    <div class="chat-area" id="chat">
+        <div class="empty-state">No messages yet. Set GEMINI_API_KEY, then start chatting.</div>
+    </div>
 
     <div class="input-area">
       <form id="chatForm" class="input-box">
         <textarea id="msgInput" rows="1" placeholder="Ask anything. Shift+Enter for a new line."></textarea>
         <button type="submit" class="send-btn">Send</button>
       </form>
-      <div class="footer-note" id="status">Ready.</div>
+      <div class="footer-note">
+        <span id="status">Ready.</span>
+        <span id="sidDisplay" style="opacity:0.5"></span>
+      </div>
     </div>
   </div>
 
   <script>
     let sessionId = localStorage.getItem("chat_sid") || ("m_" + Math.random().toString(36).substring(2, 10));
     localStorage.setItem("chat_sid", sessionId);
+    document.getElementById("sidDisplay").textContent = "ID: " + sessionId;
 
     const chat = document.getElementById("chat");
     const input = document.getElementById("msgInput");
@@ -152,6 +157,9 @@ def html_page():
 
     function append(role, text, id = null) {{
       if(id && displayedIds.has(id)) return null;
+      const empty = chat.querySelector(".empty-state");
+      if(empty) empty.remove();
+      
       if(id) displayedIds.add(id);
       const div = document.createElement("div");
       div.className = `msg ${{role}}`;
@@ -165,6 +173,8 @@ def html_page():
       e.preventDefault();
       const msg = input.value.trim(); if(!msg) return;
       input.value = ""; input.disabled = true;
+      status.textContent = "Thinking...";
+      
       append("user", msg, "u" + Date.now());
       const aiDiv = append("assistant", "...", "a" + Date.now());
       
@@ -182,21 +192,34 @@ def html_page():
           aiDiv.textContent = full;
           chat.scrollTop = chat.scrollHeight;
         }}
-      }} catch(e) {{ aiDiv.textContent = "Error connecting to server."; }}
-      finally {{ input.disabled = false; input.focus(); }}
+        status.textContent = "Ready.";
+      }} catch(e) {{ 
+        aiDiv.textContent = "Error: Connection lost."; 
+        status.textContent = "Error.";
+      }} finally {{ input.disabled = false; input.focus(); }}
     }};
 
     async function sync() {{
-      const res = await fetch("/api/history?session_id=" + sessionId);
-      const data = await res.json();
-      if(data.history.length === 0 && displayedIds.size > 0) {{
-          chat.innerHTML = ""; displayedIds.clear();
-          status.textContent = "History cleared.";
-      }} else {{
-          data.history.forEach(m => append(m.role, m.content, m.id));
-      }}
+      try {{
+        const res = await fetch("/api/history?session_id=" + sessionId);
+        const data = await res.json();
+        if(data.history.length === 0 && displayedIds.size > 0) {{
+            chat.innerHTML = '<div class="empty-state">History cleared.</div>';
+            displayedIds.clear();
+        }} else {{
+            data.history.forEach(m => append(m.role, m.content, m.id));
+        }}
+      }} catch(e) {{}}
     }}
-    setInterval(sync, 5000); sync();
+
+    document.getElementById("clearBtn").onclick = () => {{
+        localStorage.removeItem("chat_sid");
+        location.reload();
+    }};
+
+    // Tự động check mỗi 5 giây
+    setInterval(sync, 5000);
+    sync();
   </script>
 </body>
 </html>
@@ -210,6 +233,11 @@ class AIRequestHandler(BaseHTTPRequestHandler):
             sid = qs.get("session_id", ["default"])[0]
             self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
             with HISTORY_LOCK:
+                # Ưu tiên đọc từ file để tránh mất dữ liệu khi server restart
+                f = HISTORY_DIR / f"{sid}.json"
+                if f.exists() and sid not in SESSIONS:
+                    try: SESSIONS[sid] = json.loads(f.read_text(encoding="utf-8"))
+                    except: SESSIONS[sid] = []
                 hist = SESSIONS.get(sid, [])
                 self.wfile.write(json.dumps({"history": hist}).encode())
         else:
@@ -231,7 +259,9 @@ class AIRequestHandler(BaseHTTPRequestHandler):
         try:
             api_key = os.getenv("GEMINI_API_KEY", "").strip()
             with HISTORY_LOCK:
-                if sid not in SESSIONS: SESSIONS[sid] = []
+                if sid not in SESSIONS:
+                    f = HISTORY_DIR / f"{sid}.json"
+                    SESSIONS[sid] = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
                 hist = SESSIONS[sid]
             
             ctx = [{"role": "user" if h["role"] == "user" else "model", "parts": [{"text": h["content"]}]} for h in hist]
@@ -244,7 +274,7 @@ class AIRequestHandler(BaseHTTPRequestHandler):
             with request.urlopen(req) as res:
                 ans = json.loads(res.read().decode())["candidates"][0]["content"]["parts"][0]["text"]
             
-            # Stream effect
+            # Gửi từng từ để tạo hiệu ứng mượt
             acc = ""
             for word in ans.split(' '):
                 self.wfile.write((word + " ").encode()); self.wfile.flush()
@@ -253,16 +283,17 @@ class AIRequestHandler(BaseHTTPRequestHandler):
             with HISTORY_LOCK:
                 SESSIONS[sid].append({"role": "user", "content": msg, "id": str(uuid.uuid4())})
                 SESSIONS[sid].append({"role": "assistant", "content": acc.strip(), "id": str(uuid.uuid4())})
-                SESSIONS[sid] = SESSIONS[sid][-20:]
-                (HISTORY_DIR / f"{sid}.json").write_text(json.dumps(SESSIONS[sid], ensure_ascii=False))
-        except Exception as e: self.wfile.write(f"Error: {str(e)}".encode())
+                SESSIONS[sid] = SESSIONS[sid][-MAX_HISTORY_MESSAGES:]
+                # Lưu file ngay lập tức
+                (HISTORY_DIR / f"{sid}.json").write_text(json.dumps(SESSIONS[sid], ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            self.wfile.write(f"Error: {str(e)}".encode())
 
 def run():
-    for f in HISTORY_DIR.glob("*.json"):
-        try: SESSIONS[f.stem] = json.loads(f.read_text(encoding="utf-8"))
-        except: pass
+    # Khởi động luồng tự hủy dữ liệu
     threading.Thread(target=auto_delete_worker, daemon=True).start()
-    print(f"UI Server running on port {PORT}..."); ThreadingHTTPServer((HOST, PORT), AIRequestHandler).serve_forever()
+    print(f"UI Pro Server running on port {PORT} (Auto-sync: 5s, Auto-clear: 5m)")
+    ThreadingHTTPServer((HOST, PORT), AIRequestHandler).serve_forever()
 
 if __name__ == "__main__":
     run()
